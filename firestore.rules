@@ -1,0 +1,32 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function signed() { return request.auth != null; }
+  function admin() { return signed() && request.auth.uid == 'REPLACE_WITH_COORDINATOR_FIREBASE_AUTH_UID'; }
+  function own(uid) { return signed() && request.auth.uid == uid; }
+  function validString(x, max) { return x is string && x.size() > 0 && x.size() <= max; }
+  function tutorApproved(uid) { return exists(/databases/$(database)/documents/tutors/$(uid)) && get(/databases/$(database)/documents/tutors/$(uid)).data.status == 'Approved'; }
+  match /profiles/{uid} {
+   allow read: if own(uid) || admin();
+   allow create: if own(uid) && request.resource.data.keys().hasOnly(['name','email']) && validString(request.resource.data.name,80) && request.resource.data.email == request.auth.token.email;
+   allow update, delete: if false;
+  }
+  match /tutors/{uid} {
+   allow read: if signed() && (resource.data.status == 'Approved' || own(uid) || admin());
+   allow create: if own(uid) && !exists(/databases/$(database)/documents/tutors/$(uid)) && request.resource.data.keys().hasOnly(['name','school','grade','subject','level','gpa','teacherNote','status','verifiedNotes']) && request.resource.data.status == 'Pending Interview' && request.resource.data.verifiedNotes == '' && validString(request.resource.data.name,80) && validString(request.resource.data.school,100) && validString(request.resource.data.subject,50) && validString(request.resource.data.teacherNote,500) && request.resource.data.gpa is number && request.resource.data.gpa >= 0 && request.resource.data.gpa <= 4;
+   allow update, delete: if admin();
+  }
+  match /bookings/{id} {
+   allow read: if admin() || (signed() && (resource.data.studentUid == request.auth.uid || resource.data.tutorUid == request.auth.uid));
+   allow create: if signed() && request.resource.data.keys().hasOnly(['studentUid','studentName','tutorUid','subject','date','time','format','note','status']) && request.resource.data.studentUid == request.auth.uid && request.resource.data.status == 'Pending' && validString(request.resource.data.studentName,80) && validString(request.resource.data.tutorUid,128) && tutorApproved(request.resource.data.tutorUid) && request.resource.data.subject == get(/databases/$(database)/documents/tutors/$(request.resource.data.tutorUid)).data.subject && validString(request.resource.data.date,10) && validString(request.resource.data.time,5) && validString(request.resource.data.format,50) && request.resource.data.note is string && request.resource.data.note.size() <= 500;
+   allow update: if admin() || (signed() && resource.data.tutorUid == request.auth.uid && tutorApproved(request.auth.uid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) && request.resource.data.status in ['Accepted','Declined']);
+   allow delete: if false;
+  }
+  match /sessions/{id} {
+   allow read: if admin() || (signed() && resource.data.tutorUid == request.auth.uid);
+   allow create: if signed() && tutorApproved(request.auth.uid) && request.resource.data.keys().hasOnly(['tutorUid','bookingId','hours','status']) && request.resource.data.tutorUid == request.auth.uid && request.resource.data.status == 'Pending Verification' && request.resource.data.hours is number && request.resource.data.hours > 0 && request.resource.data.hours <= 8 && exists(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)) && get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.tutorUid == request.auth.uid && get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.status == 'Accepted';
+   allow update: if admin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) && request.resource.data.status in ['Verified','Rejected'];
+   allow delete: if false;
+  }
+ }
+}
